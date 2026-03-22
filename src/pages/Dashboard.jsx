@@ -5,10 +5,8 @@ import api from '../api/client'
 import { useAuth } from '../context/AuthContext'
 
 const LLM_OPTIONS = [
-  { value: 'gpt-4o',                      label: 'GPT-4o',           provider: 'OpenAI'     },
-  { value: 'gpt-3.5-turbo',               label: 'GPT-3.5 Turbo',    provider: 'OpenAI'     },
-  { value: 'claude-3-5-sonnet-20241022',  label: 'Claude 3.5 Sonnet', provider: 'Anthropic' },
-  { value: 'claude-3-haiku-20240307',     label: 'Claude 3 Haiku',    provider: 'Anthropic' },
+  { value: 'gpt-3.5-turbo',              label: 'ChatGPT',      provider: 'OpenAI'    },
+  { value: 'claude-3-5-sonnet-20241022', label: 'Claude Sonnet', provider: 'Anthropic' },
 ]
 
 export default function Dashboard() {
