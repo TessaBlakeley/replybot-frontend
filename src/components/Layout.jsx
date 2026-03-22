@@ -9,6 +9,11 @@ const NAV = [
 export default function Layout({ children }) {
   const { user, logout } = useAuth()
 
+  const nav = [
+    ...NAV,
+    ...(user?.is_admin ? [{ to: '/admin', label: 'Admin', icon: IconShield }] : []),
+  ]
+
   return (
     <div style={{ display: 'flex', minHeight: '100vh', background: 'var(--bg)' }}>
       <Sidebar user={user} logout={logout} />
@@ -50,7 +55,7 @@ function Sidebar({ user, logout }) {
 
       {/* Navigation */}
       <nav style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1 }}>
-        {NAV.map(({ to, label, icon: Icon }) => (
+        {nav.map(({ to, label, icon: Icon }) => (
           <NavLink key={to} to={to} style={({ isActive }) => ({
             display: 'flex', alignItems: 'center', gap: 10,
             padding: '9px 12px', borderRadius: 'var(--radius-md)',
@@ -87,6 +92,14 @@ function Sidebar({ user, logout }) {
 }
 
 /* ── Icons ───────────────────────────────────────────────────────────────── */
+function IconShield({ size = 20 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+    </svg>
+  )
+}
+
 function IconGrid({ size = 20 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">

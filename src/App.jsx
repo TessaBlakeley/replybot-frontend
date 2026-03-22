@@ -5,6 +5,7 @@ import Login      from './pages/Login'
 import SetPassword from './pages/SetPassword'
 import Dashboard  from './pages/Dashboard'
 import Settings   from './pages/Settings'
+import Admin      from './pages/Admin'
 
 function PrivateRoute({ children }) {
   const { user, loading } = useAuth()
@@ -33,6 +34,7 @@ function AppRoutes() {
       <Route path="/set-password"  element={<SetPassword />} />
       <Route path="/dashboard"     element={<PrivateRoute><Dashboard /></PrivateRoute>} />
       <Route path="/settings"      element={<PrivateRoute><Settings /></PrivateRoute>} />
+      <Route path="/admin"         element={<PrivateRoute><Admin /></PrivateRoute>} />
       <Route path="*"              element={<Navigate to="/" replace />} />
     </Routes>
   )
