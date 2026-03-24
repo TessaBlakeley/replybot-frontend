@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import Layout from '../components/Layout'
 import api from '../api/client'
@@ -14,28 +14,27 @@ export default function Dashboard() {
   const [params] = useSearchParams()
   const isWelcome = params.get('welcome') === '1'
 
-  const [config, setConfig]     = useState(null)
-  const [stats, setStats]       = useState(null)
-  const [replies, setReplies]   = useState([])
+  const [config, setConfig]       = useState(null)
+  const [stats, setStats]         = useState(null)
+  const [replies, setReplies]     = useState([])
   const [replyTotal, setReplyTotal] = useState(0)
   const [replyPage, setReplyPage] = useState(1)
-  const [loading, setLoading]   = useState(true)
-  const [saving, setSaving]     = useState(false)
+  const [loading, setLoading]     = useState(true)
+  const [saving, setSaving]       = useState(false)
   const [triggering, setTriggering] = useState(false)
   const [triggerMsg, setTriggerMsg] = useState('')
-  const [welcome, setWelcome]   = useState(isWelcome)
-  const [keywords, setKeywords] = useState([])
-  const [kwLoading, setKwLoading] = useState(false)
+  const [welcome, setWelcome]     = useState(isWelcome)
+  const [keywords, setKeywords]   = useState([])
+  const [logs, setLogs]           = useState([])
+  const pollRef = useRef(null)
 
-  // Formstate
-  const [character, setCharacter]     = useState('')
-  const [blacklist, setBlacklist]     = useState('')
-  const [vipAccounts, setVipAccounts] = useState([])
-  const [llmPrimary, setLlmPrimary]   = useState('gpt-3.5-turbo')
+  const [character, setCharacter]       = useState('')
+  const [blacklist, setBlacklist]       = useState('')
+  const [vipAccounts, setVipAccounts]   = useState([])
+  const [llmPrimary, setLlmPrimary]     = useState('gpt-3.5-turbo')
   const [llmSecondary, setLlmSecondary] = useState('')
-  const [mixRatio, setMixRatio]       = useState(100)
-  const [windowHours, setWindowHours] = useState(2)
-  const [maxReplies, setMaxReplies]   = useState(5)
+  const [mixRatio, setMixRatio]         = useState(100)
+  const [maxReplies, setMaxReplies]     = useState(5)
 
   const load = useCallback(async () => {
     try {
@@ -49,10 +48,9 @@ export default function Dashboard() {
       setCharacter(cfg.character_prompt || '')
       setBlacklist((cfg.blacklist_accounts || []).join('\n'))
       setVipAccounts(cfg.special_accounts || [])
-      setLlmPrimary(cfg.llm_primary || 'gpt-4o')
+      setLlmPrimary(cfg.llm_primary || 'gpt-3.5-turbo')
       setLlmSecondary(cfg.llm_secondary || '')
       setMixRatio(cfg.llm_mix_ratio ?? 100)
-      setWindowHours(cfg.window_hours || 2)
     } catch (e) {
       console.error(e)
     } finally {
@@ -62,7 +60,7 @@ export default function Dashboard() {
 
   const loadReplies = useCallback(async (page = 1) => {
     try {
-      const { data } = await api.get(`/bot/replies?page=${page}&page_size=10`)
+      const { data } = await api.get(`/bot/replies?page=${page}&page_size=5`)
       setReplies(data.items)
       setReplyTotal(data.total)
       setReplyPage(page)
@@ -76,7 +74,28 @@ export default function Dashboard() {
     } catch {}
   }, [])
 
-  useEffect(() => { load(); loadReplies(); loadKeywords() }, [load, loadReplies, loadKeywords])
+  // ── Live Activity Polling ─────────────────────────────────────────────────
+  const loadLogs = useCallback(async () => {
+    try {
+      const { data } = await api.get('/bot/logs?limit=5')
+      setLogs(data)
+    } catch {}
+  }, [])
+
+  useEffect(() => {
+    load()
+    loadReplies()
+    loadKeywords()
+    loadLogs()
+
+    // Poll alle 15 Sekunden
+    pollRef.current = setInterval(() => {
+      loadLogs()
+      load() // stats auch aktualisieren
+    }, 15000)
+
+    return () => clearInterval(pollRef.current)
+  }, [load, loadReplies, loadKeywords, loadLogs])
 
   const toggleActive = async () => {
     const newVal = !config.is_active
@@ -95,15 +114,12 @@ export default function Dashboard() {
         llm_primary: llmPrimary,
         llm_secondary: llmSecondary || null,
         llm_mix_ratio: mixRatio,
-        window_hours: windowHours,
         ...overrides,
       }
       const { data } = await api.patch('/bot/config', body)
       setConfig(data)
     } catch (e) {
-      console.error('Save error:', e)
-      console.error('Response data:', e.response?.data)
-      alert(e.response?.data?.detail || JSON.stringify(e.response?.data) || e.message || 'Save failed.')
+      alert(e.response?.data?.detail || e.message || 'Save failed.')
     } finally {
       setSaving(false)
     }
@@ -115,7 +131,8 @@ export default function Dashboard() {
     try {
       const { data } = await api.post('/bot/trigger', { max_replies: maxReplies })
       setTriggerMsg(data.message)
-      setTimeout(() => { load(); loadReplies() }, 3000)
+      // Nach 3 Sek alles neu laden
+      setTimeout(() => { load(); loadReplies(); loadLogs() }, 3000)
     } catch (e) {
       setTriggerMsg(e.response?.data?.detail || 'Trigger failed.')
     } finally {
@@ -140,13 +157,13 @@ export default function Dashboard() {
   )
 
   const isPro = user?.subscription_tier === 'pro'
+  const isAdmin = user?.is_admin
   const dailyPct = stats ? Math.round((stats.daily_used / stats.daily_limit) * 100) : 0
 
   return (
     <Layout>
       <div style={{ maxWidth: 860, margin: '0 auto', padding: '36px 32px' }}>
 
-        {/* Welcome banner */}
         {welcome && (
           <div className="animate-fade-up" style={{
             background: 'linear-gradient(135deg, #0071e3, #34aadc)',
@@ -155,14 +172,14 @@ export default function Dashboard() {
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           }}>
             <div>
-              <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 4 }}>Welcome to ReplyBot! 🎉</div>
+              <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 4 }}>Welcome to Repyla! 🎉</div>
               <div style={{ opacity: 0.85, fontSize: 14 }}>Connect your Instagram account below to get started.</div>
             </div>
             <button onClick={() => setWelcome(false)} style={{ color: 'white', opacity: 0.7, fontSize: 20, lineHeight: 1 }}>×</button>
           </div>
         )}
 
-        {/* Header row */}
+        {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 28 }}>
           <div>
             <h2 style={{ marginBottom: 4 }}>Dashboard</h2>
@@ -170,7 +187,6 @@ export default function Dashboard() {
               {config?.ig_username ? `@${config.ig_username}` : 'No Instagram connected'}
             </p>
           </div>
-          {/* Global on/off toggle */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <span style={{ fontSize: 14, color: 'var(--text-secondary)' }}>
               {config?.is_active ? 'Bot active' : 'Bot paused'}
@@ -182,7 +198,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Stats row */}
+        {/* Stats */}
         <div className="animate-fade-up" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14, marginBottom: 28 }}>
           <StatCard label="Replies today" value={stats?.replies_today ?? 0} sub={`of ${stats?.daily_limit ?? 0} limit`} />
           <StatCard label="This week" value={stats?.replies_this_week ?? 0} />
@@ -194,7 +210,7 @@ export default function Dashboard() {
           <div className="card animate-fade-up delay-1" style={{ padding: '16px 20px', marginBottom: 20 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, fontSize: 13 }}>
               <span style={{ color: 'var(--text-secondary)' }}>Daily limit</span>
-              <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{stats.daily_used} / {stats.daily_limit}</span>
+              <span style={{ fontWeight: 500 }}>{stats.daily_used} / {stats.daily_limit}</span>
             </div>
             <div style={{ height: 6, background: 'var(--surface-2)', borderRadius: 3, overflow: 'hidden' }}>
               <div style={{
@@ -222,9 +238,7 @@ export default function Dashboard() {
                 } catch (e) {
                   alert(e.response?.data?.detail || 'Could not connect Instagram.')
                 }
-              }}>
-                Connect →
-              </button>
+              }}>Connect →</button>
             </div>
           </div>
         )}
@@ -240,32 +254,31 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* How the bot works info box */}
+        {/* ── LIVE ACTIVITY FEED ──────────────────────────────────────────── */}
+        <LiveActivity logs={logs} />
+
         <BotInfoBox />
 
-        {/* Config card */}
+        {/* Config */}
         <div className="card animate-fade-up delay-3" style={{ padding: 28, marginBottom: 20 }}>
           <h3 style={{ marginBottom: 20 }}>Bot configuration</h3>
-
           <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-            {/* Character prompt */}
+
             <div className="form-group">
               <label className="label">Character prompt</label>
-              <textarea className="input" rows={4} placeholder="Describe how your bot should respond..."
+              <textarea className="input" rows={4}
+                placeholder="Describe how your bot should respond..."
                 value={character} onChange={e => setCharacter(e.target.value)}
                 style={{ minHeight: 110, borderColor: character.length > 1000 ? 'var(--danger)' : undefined }}
               />
               <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
-                <p style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
-                  Describe your persona, tone, and style.
-                </p>
+                <p style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>Describe your persona, tone, and style.</p>
                 <span style={{ fontSize: 12, fontWeight: 500, color: character.length > 1000 ? 'var(--danger)' : character.length > 900 ? 'var(--warning)' : 'var(--text-tertiary)' }}>
                   {character.length}/1000
                 </span>
               </div>
             </div>
 
-            {/* Blacklist */}
             <div className="form-group">
               <label className="label">Blacklist accounts (one per line)</label>
               <textarea className="input" rows={3} placeholder={"username1\nusername2"}
@@ -274,19 +287,15 @@ export default function Dashboard() {
               />
             </div>
 
-            {/* VIP Accounts */}
             <VipManager vipAccounts={vipAccounts} setVipAccounts={setVipAccounts} />
 
-            {/* LLM selector */}
             <div>
               <label className="label">AI model</label>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                 <div className="form-group">
                   <label className="label" style={{ fontSize: 12 }}>Primary</label>
                   <select className="input" value={llmPrimary} onChange={e => setLlmPrimary(e.target.value)}>
-                    {LLM_OPTIONS.map(o => (
-                      <option key={o.value} value={o.value}>{o.label} ({o.provider})</option>
-                    ))}
+                    {LLM_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label} ({o.provider})</option>)}
                   </select>
                 </div>
                 <div className="form-group">
@@ -300,13 +309,13 @@ export default function Dashboard() {
                   </select>
                 </div>
               </div>
-
-              {/* Mix ratio */}
               {llmSecondary && (
                 <div style={{ marginTop: 12 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 13 }}>
                     <span style={{ color: 'var(--text-secondary)' }}>Mix ratio</span>
-                    <span style={{ fontWeight: 500 }}>{mixRatio}% {LLM_OPTIONS.find(o => o.value === llmPrimary)?.label} / {100 - mixRatio}% {LLM_OPTIONS.find(o => o.value === llmSecondary)?.label}</span>
+                    <span style={{ fontWeight: 500 }}>
+                      {mixRatio}% {LLM_OPTIONS.find(o => o.value === llmPrimary)?.label} / {100 - mixRatio}% {LLM_OPTIONS.find(o => o.value === llmSecondary)?.label}
+                    </span>
                   </div>
                   <input type="range" min="0" max="100" value={mixRatio}
                     onChange={e => setMixRatio(Number(e.target.value))}
@@ -315,71 +324,58 @@ export default function Dashboard() {
               )}
             </div>
 
-            {/* Post window (Pro + Admin only) */}
-            {(isPro || user?.is_admin) && (
-              <div className="form-group">
-                <label className="label">Post-window duration</label>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  {[1, 2, 3].map(h => (
-                    <button key={h} className={`btn ${windowHours === h ? 'btn-primary' : 'btn-secondary'}`}
-                      style={{ flex: 1 }} onClick={() => setWindowHours(h)}>
-                      {h}h
-                    </button>
-                  ))}
-                </div>
-                <p style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 4 }}>
-                  Bot runs for this many hours after each new post.
-                </p>
-              </div>
-            )}
-
-            <button className="btn btn-primary" onClick={() => saveConfig()} disabled={saving || character.length > 1000} style={{ alignSelf: 'flex-start', minWidth: 120 }}>
+            <button className="btn btn-primary" onClick={() => saveConfig()}
+              disabled={saving || character.length > 1000}
+              style={{ alignSelf: 'flex-start', minWidth: 120 }}>
               {saving ? <div className="spinner" /> : character.length > 1000 ? `Too long (${character.length}/1000)` : 'Save changes'}
             </button>
           </div>
         </div>
 
-        {/* Manual trigger — Trial, Manual und Admin */}
-        {(user?.subscription_tier !== 'pro' || user?.is_admin) && (
-        <div className="card animate-fade-up delay-4" style={{ padding: 24, marginBottom: 20 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
-            <div>
-              <h4 style={{ marginBottom: 4 }}>Manual trigger</h4>
-              <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Run the bot once right now.</p>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <div className="form-group" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <label className="label" style={{ margin: 0, whiteSpace: 'nowrap' }}>Max replies</label>
-                <input className="input" type="number" min="1" max={user?.max_replies_per_run ?? 5}
-                  value={maxReplies} onChange={e => setMaxReplies(Number(e.target.value))}
-                  style={{ width: 80 }} />
+        {/* Manual trigger — nur Trial, Manual, Admin */}
+        {(!isPro || isAdmin) && (
+          <div className="card animate-fade-up delay-4" style={{ padding: 24, marginBottom: 20 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+              <div>
+                <h4 style={{ marginBottom: 4 }}>Manual trigger</h4>
+                <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Run the bot once right now.</p>
               </div>
-              <button className="btn btn-primary" onClick={triggerBot} disabled={triggering || (!config?.ig_username && !user?.is_admin)}>
-                {triggering ? <div className="spinner" /> : '▶ Run now'}
-              </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <label className="label" style={{ margin: 0, whiteSpace: 'nowrap', fontSize: 13 }}>Max replies</label>
+                  <input className="input" type="number" min="1" max={user?.max_replies_per_run ?? 5}
+                    value={maxReplies} onChange={e => setMaxReplies(Number(e.target.value))}
+                    style={{ width: 80 }} />
+                </div>
+                <button className="btn btn-primary" onClick={triggerBot}
+                  disabled={triggering || (!config?.ig_username && !isAdmin)}>
+                  {triggering ? <div className="spinner" /> : '▶ Run now'}
+                </button>
+              </div>
             </div>
+            {triggerMsg && (
+              <div style={{ marginTop: 12, padding: '10px 14px', borderRadius: 'var(--radius-md)', background: 'var(--accent-light)', color: 'var(--accent)', fontSize: 13 }}>
+                {triggerMsg}
+              </div>
+            )}
           </div>
-          {triggerMsg && (
-            <div style={{ marginTop: 12, padding: '10px 14px', borderRadius: 'var(--radius-md)', background: 'var(--accent-light)', color: 'var(--accent)', fontSize: 13 }}>
-              {triggerMsg}
-            </div>
-          )}
-        </div>
         )}
 
-        {/* Keyword DM Triggers */}
         <KeywordManager
           keywords={keywords}
           onRefresh={loadKeywords}
           tier={user?.subscription_tier}
-          loading={kwLoading}
-          setLoading={setKwLoading}
         />
 
-        {/* Reply history */}
+        {/* Reply history — 5 pro Seite */}
         <div className="card animate-fade-up delay-5" style={{ padding: 28 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 }}>
-            <h3>Reply history</h3>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+            <div>
+              <h3 style={{ marginBottom: 4 }}>Reply history</h3>
+              <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                Kommentar + Antwort. Delete entfernt beides von Instagram und der Datenbank.
+              </p>
+            </div>
             <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{replyTotal} total</span>
           </div>
 
@@ -389,32 +385,111 @@ export default function Dashboard() {
             </div>
           ) : (
             <>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {replies.map((r, i) => (
                   <ReplyRow key={r.id} reply={r} onDelete={() => deleteReply(r.id)} odd={i % 2 === 0} />
                 ))}
               </div>
 
-              {/* Pagination */}
-              {replyTotal > 10 && (
-                <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginTop: 16 }}>
+              {replyTotal > 5 && (
+                <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 12, marginTop: 16 }}>
                   <button className="btn btn-secondary btn-sm" disabled={replyPage === 1}
                     onClick={() => loadReplies(replyPage - 1)}>← Prev</button>
-                  <span style={{ lineHeight: '32px', fontSize: 13, color: 'var(--text-secondary)' }}>
-                    {replyPage} / {Math.ceil(replyTotal / 10)}
+                  <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                    {replyPage} / {Math.ceil(replyTotal / 5)}
                   </span>
-                  <button className="btn btn-secondary btn-sm" disabled={replyPage >= Math.ceil(replyTotal / 10)}
+                  <button className="btn btn-secondary btn-sm" disabled={replyPage >= Math.ceil(replyTotal / 5)}
                     onClick={() => loadReplies(replyPage + 1)}>Next →</button>
                 </div>
               )}
             </>
           )}
         </div>
+
       </div>
     </Layout>
   )
 }
 
+// ── Live Activity Feed ────────────────────────────────────────────────────────
+function LiveActivity({ logs }) {
+  if (!logs || logs.length === 0) return null
+
+  const latest = logs[0]
+  const isRunning = latest && (Date.now() - new Date(latest.ran_at).getTime()) < 60000
+
+  return (
+    <div className="card animate-fade-up" style={{
+      padding: '16px 20px', marginBottom: 20,
+      border: isRunning ? '1px solid rgba(52,199,89,0.3)' : '1px solid var(--border)',
+      background: isRunning ? 'var(--success-light)' : 'var(--surface)',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {isRunning ? (
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--success)', display: 'inline-block', boxShadow: '0 0 0 3px rgba(52,199,89,0.2)' }} />
+          ) : (
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--text-tertiary)', display: 'inline-block' }} />
+          )}
+          <span style={{ fontSize: 14, fontWeight: 500 }}>Live activity</span>
+        </div>
+        <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>updates every 15s</span>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {logs.map((log, i) => (
+          <LogRow key={log.id} log={log} isLatest={i === 0} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function LogRow({ log, isLatest }) {
+  const timeAgo = formatTimeAgo(log.ran_at)
+  const hasErrors = log.errors && log.errors.length > 0
+  const success = log.replies_sent > 0
+  const dmsSent = log.trigger === 'webhook_pro' || log.trigger === 'webhook'
+
+  let icon = '⚙️'
+  let color = 'var(--text-secondary)'
+  if (success) { icon = '✅'; color = 'var(--success)' }
+  if (hasErrors && !success) { icon = '⚠️'; color = 'var(--warning)' }
+  if (dmsSent) { icon = '✉️'; color = 'var(--accent)' }
+
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 10,
+      padding: '6px 0',
+      borderBottom: '1px solid var(--border)',
+      opacity: isLatest ? 1 : 0.6,
+    }}>
+      <span style={{ fontSize: 14, flexShrink: 0 }}>{icon}</span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <span style={{ fontSize: 13, color }}>
+          {log.replies_sent > 0 && `${log.replies_sent} repl${log.replies_sent === 1 ? 'y' : 'ies'} sent`}
+          {log.replies_sent === 0 && log.comments_found > 0 && `${log.comments_found} comments checked — 0 new`}
+          {log.replies_sent === 0 && log.comments_found === 0 && (hasErrors ? log.errors[0] : 'No comments found')}
+        </span>
+        {' '}
+        <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
+          via {log.trigger} · {log.duration_ms ? `${(log.duration_ms / 1000).toFixed(1)}s` : ''}
+        </span>
+      </div>
+      <span style={{ fontSize: 12, color: 'var(--text-tertiary)', flexShrink: 0 }}>{timeAgo}</span>
+    </div>
+  )
+}
+
+function formatTimeAgo(dateStr) {
+  const diff = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000)
+  if (diff < 60) return `${diff}s ago`
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
+  return `${Math.floor(diff / 86400)}d ago`
+}
+
+// ── StatCard ──────────────────────────────────────────────────────────────────
 function StatCard({ label, value, sub }) {
   return (
     <div className="card" style={{ padding: '18px 20px' }}>
@@ -425,44 +500,47 @@ function StatCard({ label, value, sub }) {
   )
 }
 
+// ── ReplyRow ──────────────────────────────────────────────────────────────────
 function ReplyRow({ reply, onDelete, odd }) {
-  const [expanded, setExpanded] = useState(false)
   return (
     <div style={{
-      padding: '12px 14px', borderRadius: 'var(--radius-md)',
+      padding: '14px 16px', borderRadius: 'var(--radius-md)',
       background: odd ? 'var(--surface-2)' : 'transparent',
-      cursor: 'pointer',
-    }} onClick={() => setExpanded(e => !e)}>
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-            <span style={{ fontSize: 13, fontWeight: 500 }}>@{reply.commenter_username}</span>
-            <span className="badge badge-gray" style={{ fontSize: 11 }}>{reply.llm_used}</span>
-            <span style={{ fontSize: 12, color: 'var(--text-tertiary)', marginLeft: 'auto' }}>
-              {new Date(reply.replied_at).toLocaleDateString()}
-            </span>
-          </div>
-          <div style={{ fontSize: 13, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: expanded ? 'normal' : 'nowrap' }}>
-            {reply.comment_text}
-          </div>
-          {expanded && (
-            <div style={{ marginTop: 8, padding: '8px 12px', borderRadius: 8, background: 'var(--accent-light)', fontSize: 13, color: 'var(--accent)' }}>
-              ↳ {reply.reply_text}
-            </div>
-          )}
+      display: 'flex', flexDirection: 'column', gap: 8,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 13, fontWeight: 600 }}>@{reply.commenter_username}</span>
+          <span className="badge badge-gray" style={{ fontSize: 11 }}>{reply.llm_used}</span>
         </div>
-        <button className="btn btn-sm" style={{ color: 'var(--danger)', flexShrink: 0 }}
-          onClick={e => { e.stopPropagation(); onDelete() }}>
-          Delete
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
+            {new Date(reply.replied_at).toLocaleDateString('de-DE', {
+              day: '2-digit', month: '2-digit', year: '2-digit',
+              hour: '2-digit', minute: '2-digit',
+            })}
+          </span>
+          <button className="btn btn-sm"
+            style={{ color: 'var(--danger)', padding: '2px 8px', fontSize: 12 }}
+            onClick={onDelete}>
+            Delete
+          </button>
+        </div>
+      </div>
+      <div style={{ padding: '8px 12px', borderRadius: 8, background: 'rgba(0,0,0,0.04)', fontSize: 13, color: 'var(--text-secondary)', borderLeft: '3px solid var(--border)' }}>
+        <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-tertiary)', display: 'block', marginBottom: 3, letterSpacing: '0.05em' }}>KOMMENTAR</span>
+        {reply.comment_text}
+      </div>
+      <div style={{ padding: '8px 12px', borderRadius: 8, background: 'var(--accent-light)', fontSize: 13, color: 'var(--accent)', borderLeft: '3px solid var(--accent)' }}>
+        <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--accent)', opacity: 0.7, display: 'block', marginBottom: 3, letterSpacing: '0.05em' }}>UNSERE ANTWORT</span>
+        {reply.reply_text}
       </div>
     </div>
   )
 }
 
 // ── Keyword Manager ───────────────────────────────────────────────────────────
-
-function KeywordManager({ keywords, onRefresh, tier, loading, setLoading }) {
+function KeywordManager({ keywords, onRefresh, tier }) {
   const isTrial = tier === 'trial'
   const [showForm, setShowForm] = useState(false)
   const [editItem, setEditItem] = useState(null)
@@ -484,19 +562,13 @@ function KeywordManager({ keywords, onRefresh, tier, loading, setLoading }) {
       } else {
         await api.post('/keywords', { keyword: keyword.trim(), dm_message: message.trim() })
       }
-      await onRefresh()
-      closeForm()
-    } catch (e) {
-      setError(e.response?.data?.detail || 'Save failed.')
-    }
+      await onRefresh(); closeForm()
+    } catch (e) { setError(e.response?.data?.detail || 'Save failed.') }
     setSaving(false)
   }
 
   const toggle = async (kw) => {
-    try {
-      await api.patch(`/keywords/${kw.id}`, { is_active: !kw.is_active })
-      await onRefresh()
-    } catch {}
+    try { await api.patch(`/keywords/${kw.id}`, { is_active: !kw.is_active }); await onRefresh() } catch {}
   }
 
   const del = async (id) => {
@@ -506,55 +578,42 @@ function KeywordManager({ keywords, onRefresh, tier, loading, setLoading }) {
 
   return (
     <div className="card animate-fade-up" style={{ padding: 28, marginBottom: 20 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
         <div>
           <h3 style={{ marginBottom: 4 }}>Keyword → DM Triggers</h3>
-          <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-            Auto-send a DM when someone comments a keyword.
-          </p>
+          <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Auto-send a DM when someone comments a keyword.</p>
         </div>
-        {!isTrial && (
-          <button className="btn btn-primary btn-sm" onClick={openAdd}>+ Add keyword</button>
-        )}
+        <button className="btn btn-primary btn-sm" onClick={openAdd}>+ Add keyword</button>
       </div>
 
       {isTrial && (
-        <div style={{ padding: '14px 16px', borderRadius: 'var(--radius-md)', background: 'var(--warning-light)', color: 'var(--warning)', fontSize: 13 }}>
-          Keyword DMs are available on Manual and Pro plans. <a href="/" style={{ fontWeight: 500, color: 'var(--warning)' }}>Upgrade →</a>
+        <div style={{ padding: '10px 14px', borderRadius: 'var(--radius-md)', background: 'var(--accent-light)', color: 'var(--accent)', fontSize: 12, marginBottom: 16, marginTop: 8 }}>
+          Trial: up to 2 keyword triggers, max 5 DMs/day via webhook.{' '}
+          <a href="/pricing" style={{ fontWeight: 500 }}>Upgrade for more →</a>
         </div>
       )}
 
-      {!isTrial && keywords.length === 0 && !showForm && (
+      {keywords.length === 0 && !showForm && (
         <div style={{ textAlign: 'center', padding: '24px 0', color: 'var(--text-tertiary)', fontSize: 14 }}>
           No keyword triggers yet. Add one to start sending automatic DMs.
         </div>
       )}
 
-      {/* Trigger list */}
       {keywords.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: showForm ? 16 : 0 }}>
           {keywords.map(kw => (
             <div key={kw.id} style={{
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
               padding: '12px 14px', borderRadius: 'var(--radius-md)',
-              background: 'var(--surface-2)', gap: 12,
-              opacity: kw.is_active ? 1 : 0.5,
+              background: 'var(--surface-2)', gap: 12, opacity: kw.is_active ? 1 : 0.5,
             }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                  <span style={{
-                    background: 'var(--accent-light)', color: 'var(--accent)',
-                    borderRadius: 6, padding: '2px 8px', fontSize: 12, fontWeight: 600,
-                    fontFamily: 'monospace',
-                  }}>
+                  <span style={{ background: 'var(--accent-light)', color: 'var(--accent)', borderRadius: 6, padding: '2px 8px', fontSize: 12, fontWeight: 600, fontFamily: 'monospace' }}>
                     {kw.keyword}
                   </span>
-                  <span className="badge badge-gray" style={{ fontSize: 11 }}>
-                    {kw.sent_count} sent
-                  </span>
-                  {!kw.is_active && (
-                    <span className="badge badge-gray" style={{ fontSize: 11 }}>paused</span>
-                  )}
+                  <span className="badge badge-gray" style={{ fontSize: 11 }}>{kw.sent_count} sent</span>
+                  {!kw.is_active && <span className="badge badge-gray" style={{ fontSize: 11 }}>paused</span>}
                 </div>
                 <div style={{ fontSize: 13, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {kw.dm_message}
@@ -573,29 +632,20 @@ function KeywordManager({ keywords, onRefresh, tier, loading, setLoading }) {
         </div>
       )}
 
-      {/* Add / Edit form */}
       {showForm && (
-        <div style={{ marginTop: 16, padding: '20px', borderRadius: 'var(--radius-md)', background: 'var(--surface-2)', display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <h4 style={{ marginBottom: 4 }}>{editItem ? 'Edit trigger' : 'New keyword trigger'}</h4>
+        <div style={{ marginTop: 16, padding: 20, borderRadius: 'var(--radius-md)', background: 'var(--surface-2)', display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <h4>{editItem ? 'Edit trigger' : 'New keyword trigger'}</h4>
           <div className="form-group">
             <label className="label">Keyword</label>
-            <input className="input" placeholder="e.g. LINK, INFO, PRICE"
-              value={keyword} onChange={e => setKeyword(e.target.value)} />
-            <p style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 4 }}>
-              Case-insensitive. Can appear anywhere in the comment.
-            </p>
+            <input className="input" placeholder="e.g. LINK, INFO, PRICE" value={keyword} onChange={e => setKeyword(e.target.value)} />
+            <p style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 4 }}>Case-insensitive. Can appear anywhere in the comment.</p>
           </div>
           <div className="form-group">
             <label className="label">DM message</label>
             <textarea className="input" rows={3} placeholder="Hey! Here's the link you asked for: ..."
-              value={message} onChange={e => setMessage(e.target.value)}
-              style={{ minHeight: 80 }} />
+              value={message} onChange={e => setMessage(e.target.value)} style={{ minHeight: 80 }} />
           </div>
-          {error && (
-            <div style={{ padding: '10px 14px', borderRadius: 'var(--radius-md)', background: 'var(--danger-light)', color: 'var(--danger)', fontSize: 13 }}>
-              {error}
-            </div>
-          )}
+          {error && <div style={{ padding: '10px 14px', borderRadius: 'var(--radius-md)', background: 'var(--danger-light)', color: 'var(--danger)', fontSize: 13 }}>{error}</div>}
           <div style={{ display: 'flex', gap: 8 }}>
             <button className="btn btn-secondary" onClick={closeForm}>Cancel</button>
             <button className="btn btn-primary" onClick={save} disabled={saving}>
@@ -608,13 +658,12 @@ function KeywordManager({ keywords, onRefresh, tier, loading, setLoading }) {
   )
 }
 
-// ── VIP Account Manager ───────────────────────────────────────────────────────
-
+// ── VIP Manager ───────────────────────────────────────────────────────────────
 function VipManager({ vipAccounts, setVipAccounts }) {
   const [showForm, setShowForm] = useState(false)
-  const [editIdx, setEditIdx]   = useState(null)
+  const [editIdx, setEditIdx] = useState(null)
   const [username, setUsername] = useState('')
-  const [prompt, setPrompt]     = useState('')
+  const [prompt, setPrompt] = useState('')
 
   const openAdd = () => { setEditIdx(null); setUsername(''); setPrompt(''); setShowForm(true) }
   const openEdit = (i) => { setEditIdx(i); setUsername(vipAccounts[i].username); setPrompt(vipAccounts[i].extra_prompt); setShowForm(true) }
@@ -622,7 +671,7 @@ function VipManager({ vipAccounts, setVipAccounts }) {
 
   const save = () => {
     if (!username.trim() || !prompt.trim()) return
-    const entry = { username: username.trim().replace('@',''), extra_prompt: prompt.trim() }
+    const entry = { username: username.trim().replace('@', ''), extra_prompt: prompt.trim() }
     if (editIdx !== null) {
       const updated = [...vipAccounts]; updated[editIdx] = entry; setVipAccounts(updated)
     } else {
@@ -631,19 +680,15 @@ function VipManager({ vipAccounts, setVipAccounts }) {
     close()
   }
 
-  const remove = (i) => setVipAccounts(vipAccounts.filter((_, idx) => idx !== i))
-
   return (
     <div className="form-group">
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
         <label className="label" style={{ margin: 0 }}>VIP accounts <span style={{ color: 'var(--text-tertiary)', fontWeight: 400 }}>— special replies (max 5)</span></label>
-        {vipAccounts.length < 5 && !showForm && (
-          <button className="btn btn-ghost btn-sm" onClick={openAdd}>+ Add</button>
-        )}
+        {vipAccounts.length < 5 && !showForm && <button className="btn btn-ghost btn-sm" onClick={openAdd}>+ Add</button>}
       </div>
 
       {vipAccounts.length === 0 && !showForm && (
-        <p style={{ fontSize: 13, color: 'var(--text-tertiary)' }}>No VIP accounts yet. Add up to 5 accounts that get a special reply tone.</p>
+        <p style={{ fontSize: 13, color: 'var(--text-tertiary)' }}>No VIP accounts yet.</p>
       )}
 
       {vipAccounts.map((vip, i) => (
@@ -653,7 +698,7 @@ function VipManager({ vipAccounts, setVipAccounts }) {
             <div style={{ fontSize: 12, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{vip.extra_prompt}</div>
           </div>
           <button className="btn btn-secondary btn-sm" onClick={() => openEdit(i)}>Edit</button>
-          <button className="btn btn-sm" style={{ color: 'var(--danger)' }} onClick={() => remove(i)}>✕</button>
+          <button className="btn btn-sm" style={{ color: 'var(--danger)' }} onClick={() => setVipAccounts(vipAccounts.filter((_, idx) => idx !== i))}>✕</button>
         </div>
       ))}
 
@@ -661,11 +706,11 @@ function VipManager({ vipAccounts, setVipAccounts }) {
         <div style={{ padding: 16, borderRadius: 'var(--radius-md)', background: 'var(--surface-2)', display: 'flex', flexDirection: 'column', gap: 12, marginTop: 8 }}>
           <div className="form-group">
             <label className="label">Instagram username</label>
-            <input className="input" placeholder="corastevensphoto" value={username} onChange={e => setUsername(e.target.value.replace('@',''))} style={{ height: 40 }} />
+            <input className="input" placeholder="corastevensphoto" value={username} onChange={e => setUsername(e.target.value.replace('@', ''))} style={{ height: 40 }} />
           </div>
           <div className="form-group">
-            <label className="label">Special instruction for the bot</label>
-            <textarea className="input" rows={2} placeholder="She is your girlfriend — be loving, playful and affectionate. Use terms like babe, love."
+            <label className="label">Special instruction</label>
+            <textarea className="input" rows={2} placeholder="She is your girlfriend — be loving and playful."
               value={prompt} onChange={e => setPrompt(e.target.value)} style={{ minHeight: 70 }} />
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
@@ -681,14 +726,13 @@ function VipManager({ vipAccounts, setVipAccounts }) {
 }
 
 // ── Bot Info Box ──────────────────────────────────────────────────────────────
-
 function BotInfoBox() {
   const [open, setOpen] = useState(false)
   return (
     <div className="card animate-fade-up" style={{ padding: '14px 20px', marginBottom: 20, background: 'var(--accent-light)', border: '1px solid rgba(0,113,227,0.15)' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }} onClick={() => setOpen(o => !o)}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 15 }}>ℹ️</span>
+          <span>ℹ️</span>
           <span style={{ fontSize: 14, fontWeight: 500, color: 'var(--accent)' }}>How the bot works</span>
         </div>
         <span style={{ fontSize: 12, color: 'var(--accent)', opacity: 0.7 }}>{open ? 'Hide ▲' : 'Show ▼'}</span>
@@ -698,13 +742,12 @@ function BotInfoBox() {
           {[
             { icon: '✅', text: 'Replies to comments on your latest post(s)' },
             { icon: '✅', text: 'Every comment gets a unique, human-sounding reply' },
-            { icon: '✅', text: 'Keyword triggers send an automatic DM to the commenter' },
-            { icon: '✅', text: 'VIP accounts get a special reply tone you define' },
-            { icon: '⏭️', text: 'Emoji-only comments are skipped (no reply sent)' },
-            { icon: '⏭️', text: 'Accounts on your blacklist are ignored' },
-            { icon: '⏭️', text: 'Comments already replied to are never answered twice' },
-            { icon: '⏱️', text: 'A short delay between replies keeps it looking natural' },
-            { icon: '📊', text: 'All replies are logged and can be deleted anytime' },
+            { icon: '✅', text: 'Keyword triggers send an automatic DM (all plans)' },
+            { icon: '⚡', text: 'Pro: instant webhook reactions — no polling delay' },
+            { icon: '⏭️', text: 'Emoji-only comments are skipped' },
+            { icon: '⏭️', text: 'Blacklisted accounts are ignored' },
+            { icon: '⏭️', text: 'Already-replied comments are never answered twice' },
+            { icon: '📊', text: 'All replies logged — delete anytime from Instagram + database' },
           ].map((item, i) => (
             <div key={i} style={{ display: 'flex', gap: 10, fontSize: 13, color: 'var(--text-secondary)', alignItems: 'flex-start' }}>
               <span style={{ flexShrink: 0 }}>{item.icon}</span>
