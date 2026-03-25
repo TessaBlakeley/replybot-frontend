@@ -1,6 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './context/AuthContext'
-import Landing    from './pages/Landing'
 import Login      from './pages/Login'
 import SetPassword from './pages/SetPassword'
 import Dashboard  from './pages/Dashboard'
@@ -29,14 +28,13 @@ function PageLoader() {
 function AppRoutes() {
   return (
     <Routes>
-      <Route path="/"              element={<Landing />} />
+      <Route path="/"              element={<Navigate to="/login" replace />} />
       <Route path="/login"         element={<Login />} />
       <Route path="/set-password"  element={<SetPassword />} />
       <Route path="/dashboard"     element={<PrivateRoute><Dashboard /></PrivateRoute>} />
       <Route path="/settings"      element={<PrivateRoute><Settings /></PrivateRoute>} />
       <Route path="/admin"         element={<PrivateRoute><Admin /></PrivateRoute>} />
-      <Route path="*"              element={<Navigate to="/" replace />} />
-    </Routes>
+      <Route path="*"              element={<Navigate to="/login" replace />} />    </Routes>
   )
 }
 
