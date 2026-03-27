@@ -21,16 +21,20 @@ export default function Admin() {
   const { user } = useAuth()
   const navigate = useNavigate()
 
-  const [stats, setStats]     = useState(null)
-  const [users, setUsers]     = useState([])
-  const [total, setTotal]     = useState(0)
-  const [page, setPage]       = useState(1)
-  const [search, setSearch]   = useState('')
+  const [stats, setStats]         = useState(null)
+  const [users, setUsers]         = useState([])
+  const [total, setTotal]         = useState(0)
+  const [page, setPage]           = useState(1)
+  const [search, setSearch]       = useState('')
   const [tierFilter, setTierFilter] = useState('')
-  const [loading, setLoading] = useState(true)
-  const [editUser, setEditUser] = useState(null)
+  const [loading, setLoading]     = useState(true)
+  const [editUser, setEditUser]   = useState(null)
 
-  // Redirect wenn kein Admin
+  // Global LLM Settings
+  const [llmSettings, setLlmSettings]   = useState({ temperature: 1.2, max_tokens: 200 })
+  const [llmSaving, setLlmSaving]       = useState(false)
+  const [llmMsg, setLlmMsg]             = useState('')
+
   useEffect(() => {
     if (user && !user.is_admin) navigate('/dashboard')
   }, [user, navigate])
@@ -56,8 +60,29 @@ export default function Admin() {
     setLoading(false)
   }, [search, tierFilter])
 
-  useEffect(() => { loadStats() }, [loadStats])
-  useEffect(() => { loadUsers(1) }, [loadUsers])
+  const loadLlmSettings = useCallback(async () => {
+    try {
+      const { data } = await api.get('/admin/settings/llm')
+      setLlmSettings(data)
+    } catch {}
+  }, [])
+
+  useEffect(() => { loadStats() },       [loadStats])
+  useEffect(() => { loadUsers(1) },      [loadUsers])
+  useEffect(() => { loadLlmSettings() }, [loadLlmSettings])
+
+  const saveLlmSettings = async () => {
+    setLlmSaving(true)
+    setLlmMsg('')
+    try {
+      await api.patch('/admin/settings/llm', llmSettings)
+      setLlmMsg('✓ Saved — applied to all users immediately.')
+    } catch (e) {
+      setLlmMsg(e.response?.data?.detail || 'Save failed.')
+    }
+    setLlmSaving(false)
+    setTimeout(() => setLlmMsg(''), 3000)
+  }
 
   const updateUser = async (id, body) => {
     try {
@@ -103,16 +128,82 @@ export default function Admin() {
             gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
             gap: 12, marginBottom: 28,
           }}>
-            <AdminStat label="Total users"    value={stats.total_users}         />
-            <AdminStat label="Trial"          value={stats.trial_users}          color="#636366" />
-            <AdminStat label="Manual"         value={stats.manual_users}         color="var(--accent)" />
-            <AdminStat label="Pro"            value={stats.pro_users}            color="#bf5af2" />
-            <AdminStat label="Active bots"    value={stats.active_bots}          color="var(--success)" />
-            <AdminStat label="Replies today"  value={stats.replies_today}        />
-            <AdminStat label="Replies / week" value={stats.replies_this_week}    />
-            <AdminStat label="New this week"  value={stats.new_users_this_week}  color="var(--success)" />
+            <AdminStat label="Total users"    value={stats.total_users}        />
+            <AdminStat label="Trial"          value={stats.trial_users}         color="#636366" />
+            <AdminStat label="Manual"         value={stats.manual_users}        color="var(--accent)" />
+            <AdminStat label="Pro"            value={stats.pro_users}           color="#bf5af2" />
+            <AdminStat label="Active bots"    value={stats.active_bots}         color="var(--success)" />
+            <AdminStat label="Replies today"  value={stats.replies_today}       />
+            <AdminStat label="Replies / week" value={stats.replies_this_week}   />
+            <AdminStat label="New this week"  value={stats.new_users_this_week} color="var(--success)" />
           </div>
         )}
+
+        {/* Global LLM Settings */}
+        <div className="card animate-fade-up" style={{ padding: '20px 24px', marginBottom: 28 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+            <div>
+              <h4 style={{ marginBottom: 2 }}>Global LLM Settings</h4>
+              <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                Overrides all user settings — applied to every bot run immediately.
+              </p>
+            </div>
+            {llmMsg && (
+              <span style={{ fontSize: 13, color: llmMsg.startsWith('✓') ? 'var(--success)' : 'var(--danger)' }}>
+                {llmMsg}
+              </span>
+            )}
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 16 }}>
+            {/* Temperature */}
+            <div className="form-group">
+              <label className="label" style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>Temperature</span>
+                <span style={{ fontWeight: 600, color: 'var(--accent)' }}>{llmSettings.temperature.toFixed(2)}</span>
+              </label>
+              <input
+                type="range"
+                min="0" max="2" step="0.05"
+                value={llmSettings.temperature}
+                onChange={e => setLlmSettings(s => ({ ...s, temperature: parseFloat(e.target.value) }))}
+                style={{ width: '100%', accentColor: 'var(--accent)' }}
+              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>
+                <span>0.0 — precise</span>
+                <span>2.0 — creative</span>
+              </div>
+            </div>
+
+            {/* Max Tokens */}
+            <div className="form-group">
+              <label className="label" style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>Max Tokens</span>
+                <span style={{ fontWeight: 600, color: 'var(--accent)' }}>{llmSettings.max_tokens}</span>
+              </label>
+              <input
+                type="range"
+                min="50" max="500" step="10"
+                value={llmSettings.max_tokens}
+                onChange={e => setLlmSettings(s => ({ ...s, max_tokens: parseInt(e.target.value) }))}
+                style={{ width: '100%', accentColor: 'var(--accent)' }}
+              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>
+                <span>50 — short</span>
+                <span>500 — long</span>
+              </div>
+            </div>
+          </div>
+
+          <button
+            className="btn btn-primary"
+            onClick={saveLlmSettings}
+            disabled={llmSaving}
+            style={{ width: 'fit-content' }}
+          >
+            {llmSaving ? <div className="spinner" /> : 'Save & Apply to all users'}
+          </button>
+        </div>
 
         {/* Filters */}
         <div className="animate-fade-up delay-1" style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
@@ -244,8 +335,8 @@ function AdminStat({ label, value, color }) {
 }
 
 function EditModal({ user, onClose, onSave }) {
-  const [tier, setTier]     = useState(user.subscription_tier)
-  const [status, setStatus] = useState(user.subscription_status)
+  const [tier, setTier]       = useState(user.subscription_tier)
+  const [status, setStatus]   = useState(user.subscription_status)
   const [isAdmin, setIsAdmin] = useState(user.is_admin)
 
   return (
